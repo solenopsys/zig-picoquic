@@ -1,0 +1,13 @@
+.{
+    .name = .picoquic,
+    .version = "0.0.0",
+    .fingerprint = 0xa36357e922ca18e8,
+    .minimum_zig_version = "0.14.0",
+    .dependencies = .{},
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+        "readme.md",
+    },
+}
