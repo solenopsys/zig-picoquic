@@ -10,6 +10,12 @@ const c_flags = [_][]const u8{
     "-DPTLS_WITHOUT_FUSION",
     "-DPICOQUIC_LIBRARY",
     "-DPICOTLS_USE_OPENSSL",
+    "-O2",
+    "-ffunction-sections",
+    "-fdata-sections",
+    "-fvisibility=hidden",
+    "-Wno-error",
+    "-fno-sanitize=undefined",
 };
 
 const picoquic_sources = [_][]const u8{
@@ -151,7 +157,7 @@ pub fn build(b: *std.Build) void {
 
     const lib = b.addLibrary(.{
         .name = "picoquic",
-        .linkage = .dynamic,
+        .linkage = .static,
         .root_module = pico_module,
     });
 
