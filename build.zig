@@ -1,4 +1,5 @@
 const std = @import("std");
+const build_utils = @import("build_utils.zig");
 
 const c_flags = [_][]const u8{
     "-std=c11",
@@ -127,13 +128,6 @@ const picotls_minicrypto_sources = [_][]const u8{
     "libs/picotls/lib/uecc.c",
 };
 
-const sample_sources = [_][]const u8{
-    "libs/picoquic/sample/sample.c",
-    "libs/picoquic/sample/sample_client.c",
-    "libs/picoquic/sample/sample_server.c",
-    "libs/picoquic/sample/sample_background.c",
-};
-
 const include_dirs = [_][]const u8{
     "libs/picoquic",
     "libs/picoquic/picoquic",
@@ -145,24 +139,29 @@ const include_dirs = [_][]const u8{
     "libs/picotls/deps/micro-ecc",
 };
 
-pub fn build(b: *std.Build) void {
-    const target = b.standardTargetOptions(.{});
-    const optimize = b.standardOptimizeOption(.{ .preferred_optimize_mode = .ReleaseFast });
-
-    const pico_module = b.addModule("picoquic", .{
-        .root_source_file = b.path("src/lib.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
+fn buildForTarget(
+    b: *std.Build,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+    artifacts_dir: []const u8,
+    hashes: *std.StringHashMap([]const u8),
+    json_step: *build_utils.WriteJsonStep,
+) void {
+    const target_str = build_utils.getTargetString(target);
+    const lib_name = build_utils.getLibName(std.heap.page_allocator, "picoquic", target_str);
 
     const lib = b.addLibrary(.{
-        .name = "picoquic",
+        .name = lib_name,
         .linkage = .static,
-        .root_module = pico_module,
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/lib.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
     });
 
     inline for (include_dirs) |inc| {
-        pico_module.addIncludePath(b.path(inc));
+        lib.root_module.addIncludePath(b.path(inc));
     }
 
     inline for (.{ &picoquic_sources, &picohttp_sources, &loglib_sources, &picotls_core_sources, &picotls_minicrypto_sources }) |group| {
@@ -177,133 +176,85 @@ pub fn build(b: *std.Build) void {
     }
 
     lib.linkLibC();
-    lib.linkSystemLibrary("crypto");
-    lib.linkSystemLibrary("ssl");
 
-    switch (target.result.os.tag) {
-        .linux, .freebsd, .netbsd, .dragonfly, .openbsd, .haiku, .solaris => {
-            lib.linkSystemLibrary("pthread");
-            lib.linkSystemLibrary("m");
-            lib.linkSystemLibrary("dl");
-        },
-        .windows => {
-            lib.linkSystemLibrary("ws2_32");
-            lib.linkSystemLibrary("bcrypt");
-        },
-        else => {},
-    }
+    const install = b.addInstallArtifact(lib, .{});
 
-    b.installArtifact(lib);
+    const hash_step = build_utils.HashAndMoveStep.create(
+        b,
+        lib_name,
+        target_str,
+        artifacts_dir,
+        hashes,
+    );
+    hash_step.step.dependOn(&install.step);
 
-    const demo = b.addExecutable(.{
-        .name = "picoquicdemo",
-        .root_module = b.createModule(.{
+    json_step.step.dependOn(&hash_step.step);
+}
+
+pub fn build(b: *std.Build) void {
+    const optimize = b.standardOptimizeOption(.{});
+    const artifacts_dir = "../../artifacts/libs";
+    const json_path = "current.json";
+
+    const build_all = b.option(bool, "all", "Build for all supported targets") orelse false;
+
+    if (build_all) {
+        const hashes = build_utils.createHashMap(b);
+        const json_step = build_utils.WriteJsonStep.create(b, hashes, json_path);
+
+        for (build_utils.supported_targets) |query| {
+            const target = b.resolveTargetQuery(query);
+            buildForTarget(b, target, optimize, artifacts_dir, hashes, json_step);
+        }
+
+        b.default_step.dependOn(&json_step.step);
+    } else {
+        const target = b.standardTargetOptions(.{});
+
+        const pico_module = b.addModule("picoquic", .{
+            .root_source_file = b.path("src/lib.zig"),
             .target = target,
             .optimize = optimize,
-        }),
-    });
+        });
 
-    demo.addCSourceFile(.{
-        .file = b.path("libs/picoquic/picoquicfirst/picoquicdemo.c"),
-        .flags = &c_flags,
-    });
+        const lib = b.addLibrary(.{
+            .name = "picoquic",
+            .linkage = .static,
+            .root_module = pico_module,
+        });
 
-    inline for (include_dirs) |inc| {
-        demo.addIncludePath(b.path(inc));
+        inline for (include_dirs) |inc| {
+            pico_module.addIncludePath(b.path(inc));
+        }
+
+        inline for (.{ &picoquic_sources, &picohttp_sources, &loglib_sources, &picotls_core_sources, &picotls_minicrypto_sources }) |group| {
+            lib.addCSourceFiles(.{
+                .files = group,
+                .flags = &c_flags,
+            });
+        }
+
+        inline for (include_dirs) |inc| {
+            lib.addIncludePath(b.path(inc));
+        }
+
+        lib.linkLibC();
+        lib.linkSystemLibrary("crypto");
+        lib.linkSystemLibrary("ssl");
+
+        switch (target.result.os.tag) {
+            .linux, .freebsd, .netbsd, .dragonfly, .openbsd, .haiku, .solaris => {
+                lib.linkSystemLibrary("pthread");
+                lib.linkSystemLibrary("m");
+                lib.linkSystemLibrary("dl");
+            },
+            .windows => {
+                lib.linkSystemLibrary("ws2_32");
+                lib.linkSystemLibrary("bcrypt");
+            },
+            else => {},
+        }
+
+        b.installArtifact(lib);
     }
-    demo.addIncludePath(b.path("libs/picoquic/picoquicfirst"));
-    demo.addIncludePath(b.path("libs/picoquic/picoquictest"));
-
-    demo.linkLibrary(lib);
-    demo.linkLibC();
-    demo.linkSystemLibrary("crypto");
-    demo.linkSystemLibrary("ssl");
-
-    switch (target.result.os.tag) {
-        .linux, .freebsd, .netbsd, .dragonfly, .openbsd, .haiku, .solaris => {
-            demo.linkSystemLibrary("pthread");
-            demo.linkSystemLibrary("m");
-            demo.linkSystemLibrary("dl");
-        },
-        .windows => {
-            demo.linkSystemLibrary("ws2_32");
-            demo.linkSystemLibrary("bcrypt");
-        },
-        else => {},
-    }
-
-    b.installArtifact(demo);
-
-    const sample = b.addExecutable(.{
-        .name = "picoquic_sample",
-        .root_module = b.createModule(.{
-            .target = target,
-            .optimize = optimize,
-        }),
-    });
-
-    sample.addCSourceFiles(.{
-        .files = &sample_sources,
-        .flags = &c_flags,
-    });
-
-    inline for (include_dirs) |inc| {
-        sample.addIncludePath(b.path(inc));
-    }
-    sample.addIncludePath(b.path("libs/picoquic/sample"));
-
-    sample.linkLibrary(lib);
-    sample.linkLibC();
-    sample.linkSystemLibrary("crypto");
-    sample.linkSystemLibrary("ssl");
-
-    switch (target.result.os.tag) {
-        .linux, .freebsd, .netbsd, .dragonfly, .openbsd, .haiku, .solaris => {
-            sample.linkSystemLibrary("pthread");
-            sample.linkSystemLibrary("m");
-            sample.linkSystemLibrary("dl");
-        },
-        .windows => {
-            sample.linkSystemLibrary("ws2_32");
-            sample.linkSystemLibrary("bcrypt");
-        },
-        else => {},
-    }
-
-    b.installArtifact(sample);
-
-    const echo = b.addExecutable(.{
-        .name = "picoquic_echo",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/main.zig"),
-            .target = target,
-            .optimize = optimize,
-        }),
-    });
-
-    echo.root_module.addImport("picoquic", pico_module);
-
-    inline for (include_dirs) |inc| {
-        echo.addIncludePath(b.path(inc));
-    }
-
-    echo.linkLibrary(lib);
-    echo.linkLibC();
-    echo.linkSystemLibrary("crypto");
-    echo.linkSystemLibrary("ssl");
-
-    switch (target.result.os.tag) {
-        .linux, .freebsd, .netbsd, .dragonfly, .openbsd, .haiku, .solaris => {
-            echo.linkSystemLibrary("pthread");
-            echo.linkSystemLibrary("m");
-            echo.linkSystemLibrary("dl");
-        },
-        .windows => {
-            echo.linkSystemLibrary("ws2_32");
-            echo.linkSystemLibrary("bcrypt");
-        },
-        else => {},
-    }
-
-    b.installArtifact(echo);
 }
