@@ -165,17 +165,17 @@ fn buildForTarget(
     }
 
     inline for (.{ &picoquic_sources, &picohttp_sources, &loglib_sources, &picotls_core_sources, &picotls_minicrypto_sources }) |group| {
-        lib.addCSourceFiles(.{
+        lib.root_module.addCSourceFiles(.{
             .files = group,
             .flags = &c_flags,
         });
     }
 
     inline for (include_dirs) |inc| {
-        lib.addIncludePath(b.path(inc));
+        lib.root_module.addIncludePath(b.path(inc));
     }
 
-    lib.linkLibC();
+    lib.root_module.link_libc = true;
 
     const install = b.addInstallArtifact(lib, .{});
 
@@ -228,29 +228,29 @@ pub fn build(b: *std.Build) void {
         }
 
         inline for (.{ &picoquic_sources, &picohttp_sources, &loglib_sources, &picotls_core_sources, &picotls_minicrypto_sources }) |group| {
-            lib.addCSourceFiles(.{
+            lib.root_module.addCSourceFiles(.{
                 .files = group,
                 .flags = &c_flags,
             });
         }
 
         inline for (include_dirs) |inc| {
-            lib.addIncludePath(b.path(inc));
+            lib.root_module.addIncludePath(b.path(inc));
         }
 
-        lib.linkLibC();
-        lib.linkSystemLibrary("crypto");
-        lib.linkSystemLibrary("ssl");
+        lib.root_module.link_libc = true;
+        lib.root_module.linkSystemLibrary("crypto", .{});
+        lib.root_module.linkSystemLibrary("ssl", .{});
 
         switch (target.result.os.tag) {
             .linux, .freebsd, .netbsd, .dragonfly, .openbsd, .haiku, .solaris => {
-                lib.linkSystemLibrary("pthread");
-                lib.linkSystemLibrary("m");
-                lib.linkSystemLibrary("dl");
+                lib.root_module.linkSystemLibrary("pthread", .{});
+                lib.root_module.linkSystemLibrary("m", .{});
+                lib.root_module.linkSystemLibrary("dl", .{});
             },
             .windows => {
-                lib.linkSystemLibrary("ws2_32");
-                lib.linkSystemLibrary("bcrypt");
+                lib.root_module.linkSystemLibrary("ws2_32", .{});
+                lib.root_module.linkSystemLibrary("bcrypt", .{});
             },
             else => {},
         }
